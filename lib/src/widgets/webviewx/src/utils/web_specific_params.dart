@@ -49,8 +49,8 @@ class WebSpecificParams {
       'allow-popups-to-escape-sandbox',
       'allow-presentation',
       'allow-same-origin',
-      // 'allow-top-navigation',
-      // 'allow-top-navigation-by-user-activation',
+      //'allow-top-navigation',
+      //'allow-top-navigation-by-user-activation',
     ],
     this.additionalAllowOptions = const [
       'accelerometer',

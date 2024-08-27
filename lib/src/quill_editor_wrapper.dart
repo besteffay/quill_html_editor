@@ -11,6 +11,9 @@ import 'package:quill_html_editor/src/utils/string_util.dart';
 import 'package:quill_html_editor/src/widgets/edit_table_drop_down.dart';
 import 'package:quill_html_editor/src/widgets/webviewx/src/webviewx_plus.dart';
 
+import 'package:flutter/gestures.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 /// A typedef representing a loading builder function.
 ///
 /// A [LoadingBuilder] is a function that takes a [BuildContext] as an argument
@@ -43,6 +46,7 @@ class QuillHtmlEditor extends StatefulWidget {
     this.loadingBuilder,
     this.inputAction = InputAction.newline,
     this.autoFocus = false,
+    this.isTextSelectable = true,
     this.textStyle = const TextStyle(
       fontStyle: FontStyle.normal,
       fontSize: 20.0,
@@ -67,6 +71,10 @@ class QuillHtmlEditor extends StatefulWidget {
   /// [hintText] is a placeholder, by default, the hint will be 'Description'
   /// We can override the placeholder text by passing hintText to the editor
   final String? hintText;
+
+  /// [isTextSelectable] is used to enable or disable text selection in the
+  /// editor
+  final bool isTextSelectable;
 
   /// [isEnabled] as the name suggests, is used to enable or disable the editor
   /// When it is set to false, the user cannot edit or type in the editor
@@ -169,6 +177,10 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
   /// When it is set to false, the user cannot edit or type in the editor
   bool isEnabled = true;
 
+  /// [_ignoreAllGestures] is used to enable or disable gestures
+  /// When it is set to false, the user can interact with the editor.
+  bool _ignoreAllGestures = false;
+
   late double _currentHeight;
   bool _hasFocus = false;
   String _quillJsScript = '';
@@ -176,6 +188,7 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
   late String _fontFamily;
   late String _encodedStyle;
   bool _editorLoaded = false;
+
   @override
   initState() {
     _loadScripts = rootBundle.loadString(
@@ -196,6 +209,7 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
 
   @override
   Widget build(BuildContext context) {
+
     return FutureBuilder(
         future: _loadScripts,
         builder: (context, snap) {
@@ -227,6 +241,7 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
 
   Widget _buildEditorView(
       {required BuildContext context, required double width}) {
+
     _initialContent = _getQuillPage(width: width);
     return Stack(
       children: [
@@ -238,7 +253,9 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
           onPageStarted: (s) {
             _editorLoaded = false;
           },
-          ignoreAllGestures: false,
+          //ignoreAllGestures: !isEnabled,  // Ensure gestures are not ignored when enabled
+          ignoreAllGestures: _ignoreAllGestures,
+          //ignoreAllGestures: isEnabled,
           width: width,
           onWebViewCreated: (controller) => _webviewController = controller,
           onPageFinished: (src) {
@@ -249,6 +266,19 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
                 setState(() {});
               }
               widget.controller.enableEditor(isEnabled);
+
+              // Update editor based on isEnabled
+              String jsCode = """
+                (function() {
+                  var editor = document.querySelector('.ql-editor');
+                  if (editor) {
+                    editor.contentEditable = ${isEnabled ? 'true' : 'false'};
+                  }
+                })();
+              """;
+              _webviewController?.evalRawJavascript(jsCode);
+
+
               if (widget.text != null) {
                 _setHtmlTextToEditor(htmlText: widget.text!);
               }
@@ -258,7 +288,9 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
               if (widget.onEditorCreated != null) {
                 widget.onEditorCreated!();
               }
+              widget.controller.enableTextSelection(widget.isTextSelectable);
               widget.controller._editorLoadedController?.add('');
+              _setIgnoreAllGestures(_ignoreAllGestures);
             });
           },
           dartCallBacks: {
@@ -409,9 +441,28 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
           webSpecificParams: const WebSpecificParams(
             printDebugInfo: false,
           ),
-          mobileSpecificParams: const MobileSpecificParams(
+          mobileSpecificParams:/* const*/ MobileSpecificParams(
             androidEnableHybridComposition: true,
+            gestureNavigationEnabled: true,
+            mobileGestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+              Factory<VerticalDragGestureRecognizer>(
+                () => VerticalDragGestureRecognizer(),
+              ),
+              /*Factory<TapGestureRecognizer>(
+                () => TapGestureRecognizer(),
+              ),*/
+              Factory<LongPressGestureRecognizer>(
+                () => LongPressGestureRecognizer(),
+              ),
+            },
           ),
+          navigationDelegate: (navigation) {
+            final Uri uri = Uri.parse(navigation.content.source);
+            if (uri.isScheme('http') || uri.isScheme('https')) {
+              _launchURL(uri);
+            }
+            return NavigationDecision.prevent;
+          },
         ),
         Visibility(
             visible: !_editorLoaded,
@@ -427,6 +478,14 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
                   ))
       ],
     );
+  }
+
+  Future<void> _launchURL(Uri url) async {
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url);
+    } else {
+      throw 'Could not launch $url';
+    }
   }
 
   /// a private method to get the Html text from the editor
@@ -500,6 +559,15 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
   /// a private method to enable/disable the editor
   Future _enableTextEditor({required bool isEnabled}) async {
     return await _webviewController.callJsMethod("enableEditor", [isEnabled]);
+  }
+
+  /// a private method to enable/disable text selection in editor
+  Future _enableTextSelection({required bool isEnabled}) async {
+    return await _webviewController.callJsMethod("enableTextSelection", [isEnabled]);
+  }
+
+  Future<void> _setIgnoreAllGestures(bool ignore) async {
+    await _webviewController.callJsMethod("setIgnoreAllGestures", [ignore]);
   }
 
   /// a private method to enable/disable the editor
@@ -630,7 +698,8 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
         }
         .ql-editor { 
          font-family: "$_fontFamily", sans-serif !important;
-          -webkit-user-select: text !important;
+          
+          user-select: text;
           padding-left:${widget.padding?.left ?? '0'}px !important;
           padding-right:${widget.padding?.right ?? '0'}px !important;
           padding-top:${widget.padding?.top ?? '0'}px !important;
@@ -980,14 +1049,14 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
                   delay: 2000,
                   maxStack: 500,
                   userOnly: false
+                },
+                clipboard: {
+                  matchVisual: true
                 }
               },
               theme: 'snow',
              scrollingContainer: '#scrolling-container', 
               placeholder: '${widget.hintText ?? "Description"}',
-              clipboard: {
-                matchVisual: true
-              }
             });
             
           
@@ -1251,7 +1320,16 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
             
             function enableEditor(isEnabled) {
               quilleditor.enable(isEnabled);
-              return '';
+              enableTextSelection(true);
+            }
+
+            function enableTextSelection(isEnabled){
+              var element = document.getElementsByClassName('ql-editor')[0];
+              if(isEnabled){
+                element.style.userSelect = "text";
+              } else{
+                element.style.userSelect = "none";
+              }
             }
             
             function setFormat(format, value) {
@@ -1276,6 +1354,14 @@ class QuillHtmlEditorState extends State<QuillHtmlEditor> {
             }
               return '';
             } 
+
+            function setIgnoreAllGestures(ignore) {
+              if (ignore) {
+                  document.body.style.pointerEvents = 'none';
+              } else {
+                  document.body.style.pointerEvents = 'auto';
+              }
+            }
         </script>
         </body>
         </html>
@@ -1292,6 +1378,9 @@ class QuillEditorController {
 
   ///[isEnable] to enable/disable editor
   bool isEnable = true;
+
+  ///[_ignoreAllGestures] to enable/disable ignoring gestures
+  bool _ignoreAllGestures = false;
 
   /// A controller for the Quill editor.
   ///
@@ -1447,6 +1536,18 @@ class QuillEditorController {
   void enableEditor(bool enable) async {
     isEnable = enable;
     await _editorKey?.currentState?._enableTextEditor(isEnabled: enable);
+    await _editorKey?.currentState?._enableTextSelection(isEnabled: true);
+  }
+
+  /// [enableTextSelection] method is used to enable/disable text selection in
+  /// editor
+  void enableTextSelection(bool enable) async{
+    await _editorKey?.currentState?._enableTextSelection(isEnabled: enable);
+  }
+
+  /// [setIgnoreAllGestures] method is used to enable/disable user gestures
+  Future<void> setIgnoreAllGestures(bool ignore) async {
+    await _editorKey?.currentState?._setIgnoreAllGestures(ignore);
   }
 
   @Deprecated(
